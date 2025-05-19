@@ -1,9 +1,9 @@
 import { useGLTF } from '@react-three/drei';
 import { useEffect, useRef, useState } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import useRayShooter from './useRayShooter';
-import { useThree } from '@react-three/fiber';
+
 export default function Character({ url, position = [0, 0, 0], isPlayer = false, targetRef }) {
   const groupRef = useRef();
   const mixer = useRef(null);
@@ -22,7 +22,7 @@ export default function Character({ url, position = [0, 0, 0], isPlayer = false,
     currentAction.current?.fadeOut(0.2);
     action.reset().fadeIn(0.2).play();
     currentAction.current = action;
-  
+
     const gun = scene.getObjectByName('gun');
     if (gun) {
       gun.visible = true;
@@ -31,71 +31,21 @@ export default function Character({ url, position = [0, 0, 0], isPlayer = false,
     }
   };
 
-  useFrame((_, delta) => {
-    mixer.current?.update(delta);
-    rayShooter.updateParticles(delta);
-  
-    if (!isPlayer || !groupRef.current) return;
-  
-    const moveSpeed = 0.1;
-    const moveX = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
-    const moveZ = (keys['s'] ? 1 : 0) - (keys['w'] ? 1 : 0);
-  
-    const hasMovement = moveX !== 0 || moveZ !== 0;
-  
-    if (hasMovement) {
-      const inputDir = new THREE.Vector3(moveX, 0, moveZ).normalize();
-  
-      // Get the direction the camera is facing
-      const camDir = new THREE.Vector3();
-      camera.getWorldDirection(camDir);
-      camDir.y = 0;
-      camDir.normalize();
-  
-      // Create rotation based on camera
-      const angleToCam = Math.atan2(camDir.x, camDir.z);
-      inputDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), angleToCam);
-  
-      // Move player
-      groupRef.current.position.add(inputDir.clone().multiplyScalar(moveSpeed));
-  
-      // Rotate to face direction
-      const targetAngle = Math.atan2(inputDir.x, inputDir.z);
-      groupRef.current.rotation.y = THREE.MathUtils.lerp(
-        groupRef.current.rotation.y,
-        targetAngle,
-        0.2
-      );
-  
-      playAnimation('walk');
-    } else {
-      playAnimation('idle');
-    }
-  
-    // Shoot anytime 'p' is pressed (even while walking)
-    if (keys['p']) {
-      playAnimation('shoot');
-      rayShooter.shoot();
-  
-      const gun = scene.getObjectByName('gun');
-      if (gun && flashGLB) {
-        const flash = flashGLB.clone();
-        flash.scale.set(3, 3, 3);
-        flash.position.set(-0.2, 0, 0);
-        gun.add(flash);
-        setTimeout(() => gun.remove(flash), 60);
-      }
-    }
-  
-    // Camera follows behind player
-    const targetPos = groupRef.current.position.clone();
-    const behindOffset = new THREE.Vector3(0, 2.5, -6); // behind and above
-    behindOffset.applyQuaternion(groupRef.current.quaternion);
-    const camPos = targetPos.clone().add(behindOffset);
-  
-    camera.position.lerp(camPos, 0.1);
-    camera.lookAt(targetPos);
+  const muzzle = scene.getObjectByName('muzzle') || scene.getObjectByName('gun');
+  const rayShooter = useRayShooter({
+    getSource: () => {
+      if (!muzzle) return new THREE.Vector3();
+      const offset = new THREE.Vector3(2, 4, 5);
+      muzzle.updateWorldMatrix(true, false);
+      return muzzle.localToWorld(offset);
+    },
+    getDirection: () => {
+      if (!muzzle) return new THREE.Vector3(0, 0, 3);
+      const localForward = new THREE.Vector3(0, 0, -1);
+      return localForward.applyQuaternion(muzzle.getWorldQuaternion(new THREE.Quaternion())).normalize();
+    },
   });
+
   useEffect(() => {
     if (!scene || animations.length === 0) return;
 
@@ -114,8 +64,7 @@ export default function Character({ url, position = [0, 0, 0], isPlayer = false,
       return true;
     });
 
-    const availableClips = ['idle', 'walk', 'shoot'];
-    availableClips.forEach((key) => {
+    ['idle', 'walk', 'shoot'].forEach((key) => {
       const clip = uniqueClips.find((clip) => clip.name.toLowerCase().includes(key));
       if (clip) actions.current[key] = mixer.current.clipAction(clip);
     });
@@ -126,22 +75,6 @@ export default function Character({ url, position = [0, 0, 0], isPlayer = false,
 
     return () => mixer.current.stopAllAction();
   }, [scene, animations, url]);
-
-  const muzzle = scene.getObjectByName('muzzle') || scene.getObjectByName('gun');
-
-  const rayShooter = useRayShooter({
-    getSource: () => {
-      if (!muzzle) return new THREE.Vector3();
-      const offset = new THREE.Vector3(2, 4, 5);
-      muzzle.updateWorldMatrix(true, false);
-      return muzzle.localToWorld(offset);
-    },
-    getDirection: () => {
-      if (!muzzle) return new THREE.Vector3(0, 0, 3);
-      const localForward = new THREE.Vector3(0, 0, -1);
-      return localForward.applyQuaternion(muzzle.getWorldQuaternion(new THREE.Quaternion())).normalize();
-    },
-  });
 
   useEffect(() => {
     if (!isPlayer) return;
@@ -155,7 +88,65 @@ export default function Character({ url, position = [0, 0, 0], isPlayer = false,
     };
   }, [isPlayer]);
 
-  
+  useFrame((_, delta) => {
+    mixer.current?.update(delta);
+    rayShooter.updateParticles(delta);
+
+    if (!isPlayer || !groupRef.current) return;
+
+    const moveSpeed = 0.1;
+    const moveX = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
+    const moveZ = (keys['s'] ? 1 : 0) - (keys['w'] ? 1 : 0);
+    const hasMovement = moveX !== 0 || moveZ !== 0;
+
+    if (hasMovement) {
+      const inputDir = new THREE.Vector3(moveX, 0, moveZ).normalize();
+      const camDir = new THREE.Vector3();
+      camera.getWorldDirection(camDir);
+      camDir.y = 0;
+      camDir.normalize();
+      const angleToCam = Math.atan2(camDir.x, camDir.z);
+      inputDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), angleToCam);
+
+      groupRef.current.position.add(inputDir.clone().multiplyScalar(moveSpeed));
+      const targetAngle = Math.atan2(inputDir.x, inputDir.z);
+      groupRef.current.rotation.y = THREE.MathUtils.lerp(
+        groupRef.current.rotation.y,
+        targetAngle,
+        0.2
+      );
+
+      playAnimation('walk');
+    } else {
+      playAnimation('idle');
+    }
+
+    const now = performance.now();
+    if (keys['p'] && now - lastAttackTime.current > 500) {
+      playAnimation('shoot');
+      lastAttackTime.current = now;
+
+      setTimeout(() => {
+        rayShooter.shoot();
+        const gun = scene.getObjectByName('gun');
+        if (gun && flashGLB) {
+          const flash = flashGLB.clone();
+          flash.scale.set(3, 3, 3);
+          flash.position.set(1, 0, 0);
+          gun.add(flash);
+          setTimeout(() => gun.remove(flash), 50);
+        }
+      }, 200); // delay to sync with animation
+    }
+
+    const targetPos = groupRef.current.position.clone();
+    const behindOffset = new THREE.Vector3(0, 2.5, -6);
+    behindOffset.applyQuaternion(groupRef.current.quaternion);
+    const camPos = targetPos.clone().add(behindOffset);
+    camera.position.lerp(camPos, 0.1);
+    camera.lookAt(targetPos);
+  });
+
   return (
     <group ref={groupRef} position={position}>
       <primitive object={scene} scale={[1.5, 1.5, 1.5]} />
